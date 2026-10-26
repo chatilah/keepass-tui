@@ -18,12 +18,94 @@ from pykeepass import PyKeePass
 from pykeepass.exceptions import CredentialsError, HeaderChecksumError, PayloadChecksumError
 
 
+ENTRY_ICON_GLYPHS = {
+    0: "🔑",
+    1: "🌐",
+    2: "⚠",
+    3: "🖥",
+    4: "📌",
+    5: "💬",
+    6: "▦",
+    7: "📝",
+    8: "🌐",
+    9: "🪪",
+    10: "✅",
+    11: "📷",
+    12: "📡",
+    13: "🗝",
+    14: "⚡",
+    15: "📷",
+    16: "🌟",
+    17: "💿",
+    18: "🖥",
+    19: "✉",
+    20: "⚙",
+    21: "☑",
+    22: "🗒",
+    23: "🖥",
+    24: "⚠",
+    25: "📥",
+    26: "💾",
+    27: "🗄",
+    28: "❔",
+    29: "🔐",
+    30: ">_",
+    31: "🖨",
+    32: "📊",
+    33: "🇭🇷",
+    34: "🔧",
+    35: "🌐",
+    36: "📦",
+    37: "%",
+    38: "🖥",
+    39: "🕒",
+    40: "🔍",
+    41: "⚑",
+    42: "💾",
+    43: "♻",
+    44: "🗒",
+    45: "✖",
+    46: "ℹ",
+    47: "📦",
+    48: "📁",
+    49: "📂",
+    50: "🗂",
+    51: "🔓",
+    52: "🔒",
+    53: "✅",
+    54: "🖋",
+    55: "🖼",
+    56: "📖",
+    57: "▤",
+    58: "👤",
+    59: "🔨",
+    60: "🏠",
+    61: "⭐",
+    62: "🐧",
+    63: "🪶",
+    64: "🍎",
+    65: "🌐",
+    66: "$",
+    67: "📜",
+    68: "📱",
+}
+
+
 def resolved_value(database: PyKeePass, value: Optional[str]) -> str:
     """Resolve KeePass field references, preserving the stored value if unresolved."""
     if not value:
         return value or ""
     resolved = database.deref(value)
     return resolved if resolved is not None else value
+
+
+def entry_icon_glyph(entry: Any) -> str:
+    """Return a terminal glyph for an entry's KeePass standard icon."""
+    try:
+        icon_id = int(entry.icon) if entry.icon is not None else 0
+    except (TypeError, ValueError):
+        return "◆"
+    return ENTRY_ICON_GLYPHS.get(icon_id, "◆")
 
 
 def entry_matches(database: PyKeePass, entry: Any, query: str) -> bool:
@@ -148,6 +230,59 @@ def safe_addstr(window: Any, y: int, x: int, text: str, width: int, attr: int = 
         pass
 
 
+def read_tui_key(stdscr: Any, pending_keys: list[Any]) -> Any:
+    """Read one key, decoding common CSI modified-arrow sequences."""
+    if pending_keys:
+        return pending_keys.pop(0)
+
+    key = stdscr.get_wch()
+    if key not in ("\x1b", 27):
+        return key
+
+    stdscr.timeout(35)
+    sequence_started = False
+    alt_prefix = False
+    try:
+        next_key = stdscr.get_wch()
+        if next_key in ("\x1b", 27):
+            alt_prefix = True
+            next_key = stdscr.get_wch()
+        if alt_prefix and next_key in (curses.KEY_UP, curses.KEY_DOWN):
+            return "alt_up" if next_key == curses.KEY_UP else "alt_down"
+        if next_key != "[":
+            pending_keys.append(next_key)
+            return key
+
+        sequence_started = True
+        sequence = ""
+        while len(sequence) < 8:
+            char = stdscr.get_wch()
+            sequence += char if isinstance(char, str) else chr(char)
+            if sequence[-1:].isalpha() or sequence.endswith("~"):
+                break
+    except curses.error:
+        return None if sequence_started else key
+    finally:
+        stdscr.timeout(1000)
+
+    if sequence.endswith("A"):
+        direction = "up"
+    elif sequence.endswith("B"):
+        direction = "down"
+    else:
+        return None
+
+    parts = sequence[:-1].split(";")
+    if alt_prefix and parts == ["1"]:
+        return f"alt_{direction}"
+    if len(parts) == 2 and parts[0] == "1":
+        if parts[1] == "3":
+            return f"alt_{direction}"
+        if parts[1] == "4":
+            return f"alt_shift_{direction}"
+    return None
+
+
 def draw_list(
     stdscr: Any,
     database: PyKeePass,
@@ -240,10 +375,26 @@ def draw_list(
         if item_type == "group":
             title = f"[+] {item.name or '(unnamed group)'}"
             subtitle = f"{len(item.subgroups)} folders, {len(item.entries)} entries"
+            title_x = 1
+            title_width = list_width
         else:
             title = resolved_value(database, item.title) or "(untitled)"
             subtitle = resolved_value(database, item.username) or "(no username)"
-        safe_addstr(stdscr, row, 1, title, list_width, title_attr)
+            if list_width >= 5:
+                safe_addstr(
+                    stdscr,
+                    row,
+                    1,
+                    entry_icon_glyph(item),
+                    2,
+                    title_attr,
+                )
+                title_x = 4
+                title_width = list_width - 3
+            else:
+                title_x = 1
+                title_width = list_width
+        safe_addstr(stdscr, row, title_x, title, title_width, title_attr)
         if row + 1 < height - 1:
             safe_addstr(
                 stdscr,
@@ -333,6 +484,8 @@ def draw_help(stdscr: Any) -> None:
         ("Navigation", ""),
         ("j / ↓", "Move to the next item"),
         ("k / ↑", "Move to the previous item"),
+        ("Home / End", "Jump to the first / last item"),
+        ("PgUp / PgDn", "Move faster through the list; repeats accelerate"),
         ("Enter", "Open the selected group"),
         ("Backspace", "Return to the parent group"),
         ("", ""),
@@ -606,6 +759,10 @@ def run_tui(stdscr: Any, database: PyKeePass) -> None:
     help_open = False
     details_focused = False
     detail_tab = 0
+    pending_keys = []
+    accelerated_direction = None
+    accelerated_count = 0
+    accelerated_at = 0.0
 
     while True:
         if help_open:
@@ -642,8 +799,10 @@ def run_tui(stdscr: Any, database: PyKeePass) -> None:
 
         stdscr.timeout(1000)
         try:
-            key = stdscr.get_wch()
+            key = read_tui_key(stdscr, pending_keys)
         except curses.error:
+            continue
+        if key is None:
             continue
         status = ""
         if searching:
@@ -668,7 +827,69 @@ def run_tui(stdscr: Any, database: PyKeePass) -> None:
                 offset = 0
             continue
 
-        if isinstance(key, str):
+        if key not in (
+            "alt_shift_up",
+            "alt_shift_down",
+            "page_up",
+            "page_down",
+            curses.KEY_PPAGE,
+            curses.KEY_NPAGE,
+        ):
+            accelerated_direction = None
+            accelerated_count = 0
+
+        if key in ("alt_up", "alt_down", curses.KEY_HOME, curses.KEY_END):
+            is_up = key in ("alt_up", curses.KEY_HOME)
+            selected = 0 if is_up else max(0, len(items) - 1)
+            reveal_password = False
+            details_focused = False
+            accelerated_direction = None
+            accelerated_count = 0
+        elif key in ("alt_shift_up", "alt_shift_down"):
+            direction = key.removeprefix("alt_shift_")
+            now = time.monotonic()
+            if (
+                direction == accelerated_direction
+                and now - accelerated_at <= 0.4
+            ):
+                accelerated_count += 1
+            else:
+                accelerated_direction = direction
+                accelerated_count = 0
+            accelerated_at = now
+            step = min(1 + accelerated_count, max(1, len(items)))
+            if direction == "up":
+                selected = max(0, selected - step)
+            else:
+                selected = min(max(0, len(items) - 1), selected + step)
+            reveal_password = False
+            details_focused = False
+        elif key in (curses.KEY_PPAGE, curses.KEY_NPAGE):
+            direction = "page_up" if key == curses.KEY_PPAGE else "page_down"
+            now = time.monotonic()
+            if (
+                direction == accelerated_direction
+                and now - accelerated_at <= 0.4
+            ):
+                accelerated_count += 1
+            else:
+                accelerated_direction = direction
+                accelerated_count = 0
+            accelerated_at = now
+            height, width = stdscr.getmaxyx()
+            if width < 80:
+                details_header_y = max(8, height - 12)
+                page_size = max(1, (details_header_y - 6) // 2)
+            else:
+                page_size = max(1, (height - 7) // 2)
+            step = min(page_size * (1 + accelerated_count), max(1, len(items)))
+            if direction == "page_up":
+                selected = max(0, selected - step)
+            else:
+                selected = min(max(0, len(items) - 1), selected + step)
+            reveal_password = False
+            details_focused = False
+        elif isinstance(key, str):
             key = ord(key)
         if key == ord("q"):
             break

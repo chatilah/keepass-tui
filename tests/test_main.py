@@ -16,6 +16,7 @@ from main import (
     draw_help,
     draw_list,
     draw_entry_details,
+    entry_icon_glyph,
     entry_matches,
     entry_totp,
     prompt_new_entry,
@@ -61,6 +62,161 @@ class FakeInputWindow(FakeWindow):
 
 
 class EntrySearchTests(unittest.TestCase):
+    def test_entry_list_shows_assigned_standard_icon(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "test.kdbx"
+            database = create_database(str(database_path), "password")
+            entry = database.add_entry(
+                database.root_group, "Email", "alice", "secret"
+            )
+            entry.icon = "19"
+            database.save()
+            database = PyKeePass(str(database_path), "password")
+            entry = database.entries[0]
+            window = FakeWindow(24, 100)
+
+            draw_list(
+                window,
+                database,
+                database.root_group,
+                [("entry", entry)],
+                "",
+                0,
+                0,
+                False,
+            )
+
+            self.assertEqual(window.lines[(5, 1)], "✉")
+            self.assertEqual(window.lines[(5, 4)], "Email")
+
+    def test_entry_icon_uses_default_and_unknown_fallbacks(self):
+        self.assertEqual(entry_icon_glyph(SimpleNamespace(icon=None)), "🔑")
+        self.assertEqual(entry_icon_glyph(SimpleNamespace(icon="999")), "◆")
+        self.assertEqual(entry_icon_glyph(SimpleNamespace(icon="custom")), "◆")
+
+    def test_alt_arrows_jump_to_list_ends(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "test.kdbx"
+            database = create_database(str(database_path), "password")
+            for index in range(20):
+                database.add_entry(
+                    database.root_group, f"Entry {index}", "user", "secret"
+                )
+            database.save()
+            database = PyKeePass(str(database_path), "password")
+            window = FakeInputWindow(
+                24,
+                100,
+                ["\x1b", "[", "1", ";", "3", "B", "\x1b", "[", "1", ";", "3", "A", "q"],
+            )
+            selections = []
+
+            def record_draw(stdscr, database, group, items, query, selected, *args):
+                selections.append(selected)
+                return 0
+
+            with patch("main.curses.curs_set"), patch("main.curses.noecho"), patch(
+                "main.curses.cbreak"
+            ), patch("main.draw_list", side_effect=record_draw):
+                from main import run_tui
+
+                run_tui(window, database)
+
+            self.assertEqual(selections, [0, 19, 0])
+
+    def test_alt_shift_arrows_accelerate_repeated_movement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "test.kdbx"
+            database = create_database(str(database_path), "password")
+            for index in range(20):
+                database.add_entry(
+                    database.root_group, f"Entry {index}", "user", "secret"
+                )
+            database.save()
+            database = PyKeePass(str(database_path), "password")
+            window = FakeInputWindow(
+                24,
+                100,
+                [
+                    "\x1b", "[", "1", ";", "4", "B",
+                    "\x1b", "[", "1", ";", "4", "B",
+                    "\x1b", "[", "1", ";", "4", "B",
+                    "q",
+                ],
+            )
+            selections = []
+
+            def record_draw(stdscr, database, group, items, query, selected, *args):
+                selections.append(selected)
+                return 0
+
+            with patch("main.curses.curs_set"), patch("main.curses.noecho"), patch(
+                "main.curses.cbreak"
+            ), patch("main.draw_list", side_effect=record_draw):
+                from main import run_tui
+
+                run_tui(window, database)
+
+            self.assertEqual(selections, [0, 1, 3, 6])
+
+    def test_home_end_jump_to_list_ends(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "test.kdbx"
+            database = create_database(str(database_path), "password")
+            for index in range(20):
+                database.add_entry(
+                    database.root_group, f"Entry {index}", "user", "secret"
+                )
+            database.save()
+            database = PyKeePass(str(database_path), "password")
+            window = FakeInputWindow(
+                24, 100, [curses.KEY_END, curses.KEY_HOME, "q"]
+            )
+            selections = []
+
+            def record_draw(stdscr, database, group, items, query, selected, *args):
+                selections.append(selected)
+                return 0
+
+            with patch("main.curses.curs_set"), patch("main.curses.noecho"), patch(
+                "main.curses.cbreak"
+            ), patch("main.draw_list", side_effect=record_draw):
+                from main import run_tui
+
+                run_tui(window, database)
+
+            self.assertEqual(selections, [0, 19, 0])
+
+    def test_page_keys_repeat_with_accelerating_steps(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "test.kdbx"
+            database = create_database(str(database_path), "password")
+            for index in range(50):
+                database.add_entry(
+                    database.root_group, f"Entry {index}", "user", "secret"
+                )
+            database.save()
+            database = PyKeePass(str(database_path), "password")
+            window = FakeInputWindow(
+                24,
+                100,
+                [curses.KEY_NPAGE, curses.KEY_NPAGE, curses.KEY_PPAGE, "q"],
+            )
+            selections = []
+
+            def record_draw(stdscr, database, group, items, query, selected, *args):
+                selections.append(selected)
+                return 0
+
+            with patch("main.curses.curs_set"), patch("main.curses.noecho"), patch(
+                "main.curses.cbreak"
+            ), patch("main.draw_list", side_effect=record_draw):
+                from main import run_tui
+
+                run_tui(window, database)
+
+            self.assertEqual(selections, [0, 8, 24, 16])
+
     def test_formula_renderer_inserts_release_version_and_checksums(self):
         with tempfile.TemporaryDirectory() as directory:
             directory = Path(directory)

@@ -49,6 +49,11 @@ attaches the checksum-filled formula to its GitHub release. Its template is in
 ## Controls
 
 - `?`: open the in-app shortcut guide
+- `Home` / `End`: jump to the first / last item in the current list
+- `Page Up` / `Page Down`: move by a page; repeated presses accelerate
+- `Alt+Up` / `Alt+Down`: jump to the first / last item in the current list
+- Hold `Alt+Shift+Up` / `Alt+Shift+Down` to move progressively faster through
+  the list when supported by the terminal
 - `a`: add an entry to the current group (title required; username, password,
   URL, and notes are optional)
 - In the add-entry form, use `Tab` or `Enter` to move between fields; `Enter`
@@ -64,6 +69,10 @@ attaches the checksum-filled formula to its GitHub release. Its template is in
 - `/`: start live search in the current group
 - The selected entry's details appear in the right pane
 - The panes use columns on wide terminals and stack vertically on narrow ones
+
+Entries display a terminal glyph for their assigned KeePass standard icon.
+The glyphs are text approximations of KeePass's bitmap icons; entries without an
+explicit icon use the default key glyph.
 
 Passwords are masked by default and are not included in the entry list.
 KeePass `{REF:...}` field references are resolved for display and search.
