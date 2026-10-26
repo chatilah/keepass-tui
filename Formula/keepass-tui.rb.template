@@ -1,0 +1,26 @@
+# typed: strict
+# frozen_string_literal: true
+
+# A terminal interface for browsing KeePass databases.
+class KeepassTui < Formula
+  desc "Terminal interface for KeePass databases"
+  homepage "https://github.com/chatilah/keepass-tui"
+  version "@@VERSION@@"
+  depends_on :macos
+
+  if Hardware::CPU.arm?
+    url "https://github.com/chatilah/keepass-tui/releases/download/v#{version}/keepass-tui-macos-arm64.tar.gz"
+    sha256 "@@ARM64_SHA256@@"
+  else
+    url "https://github.com/chatilah/keepass-tui/releases/download/v#{version}/keepass-tui-macos-x86_64.tar.gz"
+    sha256 "@@X86_64_SHA256@@"
+  end
+
+  def install
+    bin.install "keepass-tui"
+  end
+
+  test do
+    assert_match "usage:", shell_output("#{bin}/keepass-tui --help")
+  end
+end

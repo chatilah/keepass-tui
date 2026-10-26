@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e .
+      - run: python -m unittest discover -s tests -v
+
+  build-macos:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            architecture: arm64
+          - runner: macos-15-intel
+            architecture: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Verify runner architecture
+        run: test "$(uname -m)" = "${{ matrix.architecture }}"
+      - run: python -m pip install --upgrade pip pyinstaller
+      - run: python -m pip install .
+      - run: pyinstaller --clean --onefile --name keepass-tui main.py
+      - run: ./dist/keepass-tui --help
+      - name: Package and checksum binary
+        run: |
+          archive="keepass-tui-macos-${{ matrix.architecture }}.tar.gz"
+          tar -czf "$archive" -C dist keepass-tui
+          shasum -a 256 "$archive" | awk '{print $1}' > "$archive.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.architecture }}
+          path: |
+            keepass-tui-macos-${{ matrix.architecture }}.tar.gz
+            keepass-tui-macos-${{ matrix.architecture }}.tar.gz.sha256
+          if-no-files-found: error
+
+  publish:
+    needs: build-macos
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Generate Homebrew formula
+        run: |
+          python scripts/render_homebrew_formula.py \
+            "$GITHUB_REF_NAME" \
+            release-assets/keepass-tui-macos-arm64.tar.gz.sha256 \
+            release-assets/keepass-tui-macos-x86_64.tar.gz.sha256 \
+            --output release-assets/keepass-tui.rb
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            release-assets/keepass-tui-macos-arm64.tar.gz \
+            release-assets/keepass-tui-macos-x86_64.tar.gz \
+            release-assets/keepass-tui.rb \
+            --generate-notes \
+            --title "$GITHUB_REF_NAME"
