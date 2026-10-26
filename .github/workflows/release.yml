@@ -33,6 +33,35 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Verify runner architecture
         run: test "$(uname -m)" = "${{ matrix.architecture }}"
+      - name: Set package version from release tag
+        run: |
+          tag="$GITHUB_REF_NAME"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release tag must use vMAJOR.MINOR.PATCH format."
+            exit 1
+          fi
+          version="${tag#v}"
+          python3 - "$version" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          path = pathlib.Path("Cargo.toml")
+          manifest = path.read_text()
+          package = re.search(r"(?ms)^\[package\][ \t]*\r?\n.*?(?=^\[|\Z)", manifest)
+          if package is None:
+              raise SystemExit("Could not find [package] section in Cargo.toml")
+          updated, count = re.subn(
+              r'(?m)^version[ \t]*=[ \t]*"[^"]+"[ \t]*$',
+              f'version = "{sys.argv[1]}"',
+              package.group(),
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit("Could not update package version in Cargo.toml")
+          path.write_text(manifest[:package.start()] + updated + manifest[package.end():])
+          PY
+          cargo check
       - run: cargo build --release --locked
       - run: ./target/release/keepass-tui --help
       - name: Package and checksum binary

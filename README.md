@@ -40,7 +40,9 @@ For development, run `cargo test` and `cargo run -- --help`.
 GitHub Actions checks formatting and runs the Rust test suite. Pushing a
 `vMAJOR.MINOR.PATCH` tag runs the tests, builds standalone Apple Silicon and
 Intel macOS binaries, and creates a GitHub release. The release includes a
-checksum-filled `keepass-tui.rb` Homebrew formula.
+checksum-filled `keepass-tui.rb` Homebrew formula. Release builds derive the
+Cargo package version from the tag by removing its leading `v`; the checked-in
+`Cargo.toml` version is used for local builds.
 
 ## Homebrew
 
