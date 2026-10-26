@@ -58,6 +58,10 @@ attaches the checksum-filled formula to its GitHub release. Its template is in
 
 ## Controls
 
+- `F10`: open the menu bar; use `Left` / `Right` to choose a menu, `Up` /
+  `Down` to choose an item, `Enter` to activate it, and `Esc` to close it
+- Mouse: click a menu name to open it and click an item to activate it; click
+  an entry in the contents list to select it and use the scroll wheel to browse
 - `?`: open the in-app shortcut guide
 - `Home` / `End`: jump to the first / last item in the current list
 - `Page Up` / `Page Down`: move by a page; repeated presses accelerate
@@ -79,6 +83,12 @@ attaches the checksum-filled formula to its GitHub release. Its template is in
 - `/`: start live search in the current group
 - The selected entry's details appear in the right pane
 - The panes use columns on wide terminals and stack vertically on narrow ones
+
+The menu bar provides File, Navigate, Entry, and Help actions. Existing
+keyboard shortcuts remain available alongside the menus. On systems where a
+terminal needs mouse reporting enabled, use a terminal that supports mouse
+events. Help > About displays the application version, source commit, and
+build target platform.
 
 Entries display a terminal glyph for their assigned KeePass standard icon.
 The glyphs are text approximations of KeePass's bitmap icons; entries without an

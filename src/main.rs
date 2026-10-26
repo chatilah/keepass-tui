@@ -10,7 +10,10 @@ use arboard::Clipboard;
 use base64::Engine;
 use clap::Parser;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    event::{
+        self, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
+        MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -78,11 +81,48 @@ struct PathForm {
 enum InputMode {
     #[default]
     Browse,
+    Menu {
+        menu: usize,
+        selected: usize,
+    },
     Search,
     Help,
+    About,
     AddEntry(EntryForm),
     AddAttachment(PathForm),
 }
+
+#[derive(Clone, Copy)]
+enum MenuAction {
+    Quit,
+    Search,
+    Parent,
+    FirstItem,
+    LastItem,
+    PreviousPage,
+    NextPage,
+    AddEntry,
+    AddAttachment,
+    TogglePassword,
+    GeneralTab,
+    AttachmentsTab,
+    DetailsTab,
+    CopyUsername,
+    CopyPassword,
+    CopyUrl,
+    CopyTotp,
+    Help,
+    About,
+}
+
+#[derive(Clone, Copy)]
+struct MenuItem {
+    label: &'static str,
+    shortcut: &'static str,
+    action: MenuAction,
+}
+
+const MENU_LABELS: [&str; 4] = ["File", "Navigate", "Entry", "Help"];
 
 /// Represents the state of the application.
 struct App {
@@ -212,7 +252,7 @@ fn decode_keyfile(contents: &[u8]) -> Result<Vec<u8>> {
 fn run_app(app: &mut App) -> Result<()> {
     enable_raw_mode().context("Could not enable raw terminal mode")?;
     let mut stdout = io::stdout();
-    if let Err(error) = execute!(stdout, EnterAlternateScreen) {
+    if let Err(error) = execute!(stdout, EnterAlternateScreen, EnableMouseCapture) {
         let _ = disable_raw_mode();
         return Err(error).context("Could not enter alternate screen");
     }
@@ -220,11 +260,18 @@ fn run_app(app: &mut App) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("Could not initialize terminal")?;
     let result = event_loop(&mut terminal, app);
-    disable_raw_mode().context("Could not restore terminal mode")?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)
-        .context("Could not leave alternate screen")?;
-    terminal.show_cursor().context("Could not restore cursor")?;
-    result
+    let mouse_result = execute!(
+        terminal.backend_mut(),
+        crossterm::event::DisableMouseCapture,
+        LeaveAlternateScreen
+    );
+    let raw_mode_result = disable_raw_mode();
+    let cursor_result = terminal.show_cursor();
+    result?;
+    mouse_result.context("Could not leave alternate screen")?;
+    raw_mode_result.context("Could not restore terminal mode")?;
+    cursor_result.context("Could not restore cursor")?;
+    Ok(())
 }
 
 fn event_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App) -> Result<()> {
@@ -236,11 +283,20 @@ fn event_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut A
         if !event::poll(Duration::from_millis(250))? {
             continue;
         }
-        let Event::Key(key) = event::read()? else {
-            continue;
-        };
-        if handle_key(app, &items, key)? {
-            return Ok(());
+        match event::read()? {
+            Event::Key(key) => {
+                if handle_key(app, &items, key)? {
+                    return Ok(());
+                }
+            }
+            Event::Mouse(mouse) => {
+                let size = terminal.size()?;
+                let area = Rect::new(0, 0, size.width, size.height);
+                if handle_mouse(app, &items, mouse, area)? {
+                    return Ok(());
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -382,31 +438,157 @@ fn resolve_reference(database: &Database, current: &Entry, reference: &str) -> S
     }
 }
 
-fn draw(frame: &mut Frame<'_>, app: &App, items: &[BrowserItem]) {
-    let area = frame.area();
-    let header = Line::from(vec![
-        "KEEPASS TUI".into(),
-        format!(
-            "  {}  |  / search  |  ? help",
-            group_path(&app.database, app.current_group)
-        )
-        .into(),
-    ]);
+fn menu_items(menu: usize) -> &'static [MenuItem] {
+    const FILE: [MenuItem; 1] = [MenuItem {
+        label: "Quit",
+        shortcut: "q",
+        action: MenuAction::Quit,
+    }];
+    const NAVIGATE: [MenuItem; 6] = [
+        MenuItem {
+            label: "Search",
+            shortcut: "/",
+            action: MenuAction::Search,
+        },
+        MenuItem {
+            label: "Parent group",
+            shortcut: "Esc",
+            action: MenuAction::Parent,
+        },
+        MenuItem {
+            label: "First item",
+            shortcut: "Home",
+            action: MenuAction::FirstItem,
+        },
+        MenuItem {
+            label: "Last item",
+            shortcut: "End",
+            action: MenuAction::LastItem,
+        },
+        MenuItem {
+            label: "Previous page",
+            shortcut: "Page Up",
+            action: MenuAction::PreviousPage,
+        },
+        MenuItem {
+            label: "Next page",
+            shortcut: "Page Down",
+            action: MenuAction::NextPage,
+        },
+    ];
+    const ENTRY: [MenuItem; 10] = [
+        MenuItem {
+            label: "Add entry",
+            shortcut: "a",
+            action: MenuAction::AddEntry,
+        },
+        MenuItem {
+            label: "Add attachment",
+            shortcut: "2, a",
+            action: MenuAction::AddAttachment,
+        },
+        MenuItem {
+            label: "Reveal / hide password",
+            shortcut: "p",
+            action: MenuAction::TogglePassword,
+        },
+        MenuItem {
+            label: "General tab",
+            shortcut: "1",
+            action: MenuAction::GeneralTab,
+        },
+        MenuItem {
+            label: "Attachments tab",
+            shortcut: "2",
+            action: MenuAction::AttachmentsTab,
+        },
+        MenuItem {
+            label: "Details tab",
+            shortcut: "3",
+            action: MenuAction::DetailsTab,
+        },
+        MenuItem {
+            label: "Copy username",
+            shortcut: "u",
+            action: MenuAction::CopyUsername,
+        },
+        MenuItem {
+            label: "Copy password",
+            shortcut: "w",
+            action: MenuAction::CopyPassword,
+        },
+        MenuItem {
+            label: "Copy URL",
+            shortcut: "l",
+            action: MenuAction::CopyUrl,
+        },
+        MenuItem {
+            label: "Copy TOTP",
+            shortcut: "t",
+            action: MenuAction::CopyTotp,
+        },
+    ];
+    const HELP: [MenuItem; 2] = [
+        MenuItem {
+            label: "Keyboard shortcuts",
+            shortcut: "?",
+            action: MenuAction::Help,
+        },
+        MenuItem {
+            label: "About",
+            shortcut: "",
+            action: MenuAction::About,
+        },
+    ];
+    match menu {
+        0 => &FILE,
+        1 => &NAVIGATE,
+        2 => &ENTRY,
+        _ => &HELP,
+    }
+}
+
+fn menu_bar_item_x(menu: usize) -> u16 {
+    let preceding_width = MENU_LABELS[..menu]
+        .iter()
+        .map(|label| label.len() as u16 + 4)
+        .sum::<u16>();
+    1 + preceding_width
+}
+
+fn menu_index_at(column: u16) -> Option<usize> {
+    MENU_LABELS.iter().enumerate().find_map(|(menu, label)| {
+        let start = menu_bar_item_x(menu);
+        (column >= start && column < start + label.len() as u16 + 2).then_some(menu)
+    })
+}
+
+fn menu_popup_rect(menu: usize, area: Rect) -> Option<Rect> {
+    let items = menu_items(menu);
+    let width = items
+        .iter()
+        .map(|item| item.label.len() + item.shortcut.len() + 5)
+        .max()
+        .unwrap_or(16)
+        .min(area.width.saturating_sub(2) as usize) as u16;
+    let height = (items.len() as u16 + 2).min(area.height.saturating_sub(3));
+    if width == 0 || height <= 2 {
+        return None;
+    }
+    let x = menu_bar_item_x(menu).min(area.width.saturating_sub(width));
+    Some(Rect::new(area.x + x, area.y + 2, width, height))
+}
+
+fn content_panes(area: Rect) -> [Rect; 2] {
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2),
+            Constraint::Length(3),
             Constraint::Min(5),
             Constraint::Length(1),
         ])
         .split(area);
-    frame.render_widget(
-        Paragraph::new(header).block(Block::default().borders(Borders::BOTTOM)),
-        outer[0],
-    );
-
-    let details_on_bottom = area.width < 80;
-    let panes = if details_on_bottom {
+    let content = if area.width < 80 {
         Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Percentage(55), Constraint::Min(5)])
@@ -417,6 +599,243 @@ fn draw(frame: &mut Frame<'_>, app: &App, items: &[BrowserItem]) {
             .constraints([Constraint::Percentage(38), Constraint::Min(25)])
             .split(outer[1])
     };
+    [content[0], content[1]]
+}
+
+fn handle_mouse(
+    app: &mut App,
+    items: &[BrowserItem],
+    mouse: MouseEvent,
+    area: Rect,
+) -> Result<bool> {
+    if !matches!(
+        mouse.kind,
+        MouseEventKind::Down(MouseButton::Left)
+            | MouseEventKind::ScrollUp
+            | MouseEventKind::ScrollDown
+    ) {
+        return Ok(false);
+    }
+
+    if matches!(&app.mode, InputMode::Browse | InputMode::Menu { .. })
+        && mouse.kind == MouseEventKind::Down(MouseButton::Left)
+        && mouse.row == area.y + 1
+    {
+        if let Some(menu) = menu_index_at(mouse.column.saturating_sub(area.x)) {
+            app.mode = InputMode::Menu { menu, selected: 0 };
+            return Ok(false);
+        }
+    }
+
+    if matches!(app.mode, InputMode::Menu { .. }) {
+        if let InputMode::Menu { menu, .. } = &app.mode {
+            let menu = *menu;
+            if let Some(popup) = menu_popup_rect(menu, area) {
+                if mouse.column >= popup.x
+                    && mouse.column < popup.x + popup.width
+                    && mouse.row > popup.y
+                    && mouse.row < popup.y + popup.height - 1
+                {
+                    let selected = (mouse.row - popup.y - 1) as usize;
+                    if let InputMode::Menu {
+                        selected: active, ..
+                    } = &mut app.mode
+                    {
+                        *active = selected;
+                    }
+                    if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                        return activate_menu_item(app, items, menu_items(menu)[selected].action);
+                    }
+                    return Ok(false);
+                }
+            }
+        }
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+            app.mode = InputMode::Browse;
+        } else {
+            return Ok(false);
+        }
+    } else if !matches!(app.mode, InputMode::Browse) {
+        return Ok(false);
+    }
+
+    let list = content_panes(area)[0];
+    match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left)
+            if mouse.column >= list.x
+                && mouse.column < list.x + list.width
+                && mouse.row > list.y
+                && mouse.row < list.y + list.height - 1 =>
+        {
+            let visible = usize::from(list.height.saturating_sub(2) / 2).max(1);
+            let offset = app.selected.saturating_sub(visible.saturating_sub(1));
+            let clicked = offset + usize::from(mouse.row - list.y - 1) / 2;
+            if clicked < items.len() {
+                app.selected = clicked;
+                clear_focus(app);
+            }
+        }
+        MouseEventKind::ScrollUp => {
+            app.selected = app.selected.saturating_sub(3);
+            clear_focus(app);
+        }
+        MouseEventKind::ScrollDown => {
+            app.selected = app
+                .selected
+                .saturating_add(3)
+                .min(items.len().saturating_sub(1));
+            clear_focus(app);
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+fn activate_menu_item(app: &mut App, items: &[BrowserItem], action: MenuAction) -> Result<bool> {
+    app.mode = InputMode::Browse;
+    match action {
+        MenuAction::Quit => return Ok(true),
+        MenuAction::Search => {
+            app.previous_query = app.query.clone();
+            app.query.clear();
+            app.selected = 0;
+            app.mode = InputMode::Search;
+        }
+        MenuAction::Parent => {
+            if let Some((group, selected)) = app.group_history.pop() {
+                app.current_group = group;
+                app.selected = selected;
+                app.query.clear();
+                app.detail_tab = 0;
+                clear_focus(app);
+            }
+        }
+        MenuAction::FirstItem | MenuAction::LastItem => {
+            app.selected = if matches!(action, MenuAction::FirstItem) {
+                0
+            } else {
+                items.len().saturating_sub(1)
+            };
+            clear_focus(app);
+        }
+        MenuAction::PreviousPage | MenuAction::NextPage => {
+            let down = matches!(action, MenuAction::NextPage);
+            let step = accelerated_step(app, down, items.len(), 8);
+            if down {
+                app.selected = app
+                    .selected
+                    .saturating_add(step)
+                    .min(items.len().saturating_sub(1));
+            } else {
+                app.selected = app.selected.saturating_sub(step);
+            }
+            clear_focus(app);
+        }
+        MenuAction::AddEntry => app.mode = InputMode::AddEntry(EntryForm::default()),
+        MenuAction::AddAttachment => {
+            if items
+                .get(app.selected)
+                .is_some_and(|item| item.kind == ItemKind::Entry)
+            {
+                app.mode = InputMode::AddAttachment(PathForm::default());
+            } else {
+                app.status = "Select an entry first.".to_string();
+            }
+        }
+        MenuAction::TogglePassword => {
+            if items
+                .get(app.selected)
+                .is_some_and(|item| item.kind == ItemKind::Entry)
+            {
+                app.reveal_password = !app.reveal_password;
+            } else {
+                app.status = "Select an entry first.".to_string();
+            }
+        }
+        MenuAction::GeneralTab | MenuAction::AttachmentsTab | MenuAction::DetailsTab => {
+            if items
+                .get(app.selected)
+                .is_some_and(|item| item.kind == ItemKind::Entry)
+            {
+                app.detail_tab = match action {
+                    MenuAction::GeneralTab => 0,
+                    MenuAction::AttachmentsTab => 1,
+                    _ => 2,
+                };
+                app.details_focused = true;
+            } else {
+                app.status = "Select an entry first.".to_string();
+            }
+        }
+        MenuAction::CopyUsername
+        | MenuAction::CopyPassword
+        | MenuAction::CopyUrl
+        | MenuAction::CopyTotp => {
+            let code = match action {
+                MenuAction::CopyUsername => 'u',
+                MenuAction::CopyPassword => 'w',
+                MenuAction::CopyUrl => 'l',
+                _ => 't',
+            };
+            if let Some(item) = items
+                .get(app.selected)
+                .filter(|item| item.kind == ItemKind::Entry)
+            {
+                if let Err(error) = copy_entry_value(app, item.id, KeyCode::Char(code)) {
+                    app.status = format!("Copy failed: {error:#}");
+                }
+            } else {
+                app.status = "Select an entry first.".to_string();
+            }
+        }
+        MenuAction::Help => app.mode = InputMode::Help,
+        MenuAction::About => app.mode = InputMode::About,
+    }
+    Ok(false)
+}
+
+fn draw(frame: &mut Frame<'_>, app: &App, items: &[BrowserItem]) {
+    let area = frame.area();
+    let outer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(5),
+            Constraint::Length(1),
+        ])
+        .split(area);
+    let header = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(2)])
+        .split(outer[0]);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            "KEEPASS TUI".into(),
+            format!("  {}", group_path(&app.database, app.current_group)).into(),
+        ])),
+        header[0],
+    );
+    let menu_mode = match &app.mode {
+        InputMode::Menu { menu, .. } => Some(*menu),
+        _ => None,
+    };
+    let mut menu_spans = Vec::new();
+    menu_spans.push(" ".into());
+    for (index, label) in MENU_LABELS.iter().enumerate() {
+        let style = if menu_mode == Some(index) {
+            Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD)
+        } else {
+            Style::default().add_modifier(Modifier::BOLD)
+        };
+        menu_spans.push(ratatui::text::Span::styled(format!(" {label} "), style));
+        menu_spans.push("  ".into());
+    }
+    frame.render_widget(
+        Paragraph::new(Line::from(menu_spans)).block(Block::default().borders(Borders::BOTTOM)),
+        header[1],
+    );
+
+    let panes = content_panes(area);
     let list_items = items
         .iter()
         .map(|item| {
@@ -468,8 +887,12 @@ fn draw(frame: &mut Frame<'_>, app: &App, items: &[BrowserItem]) {
     }
 
     let footer = match &app.mode {
+        InputMode::Menu { .. } => {
+            "Menu: ←/→ choose | ↑/↓ move | Enter select | Esc close | F10 toggle".to_string()
+        }
         InputMode::Search => format!("Search: {}_", app.query),
         InputMode::Help => "Press ? or Esc to return.".to_string(),
+        InputMode::About => "Press Enter or Esc to close.".to_string(),
         InputMode::AddEntry(form) => format!(
             "ADD ENTRY  {}: {}",
             ["Title", "Username", "Password", "URL", "Notes"][form.active],
@@ -494,9 +917,41 @@ fn draw(frame: &mut Frame<'_>, app: &App, items: &[BrowserItem]) {
         outer[2],
     );
 
+    if let InputMode::Menu { menu, selected } = &app.mode {
+        let menu_items = menu_items(*menu);
+        if let Some(popup) = menu_popup_rect(*menu, area) {
+            let list_items = menu_items
+                .iter()
+                .map(|item| {
+                    ListItem::new(format!(
+                        "{:<width$} {}",
+                        item.label,
+                        item.shortcut,
+                        width = (popup.width as usize).saturating_sub(item.shortcut.len() + 4)
+                    ))
+                })
+                .collect::<Vec<_>>();
+            let mut list_state = ListState::default();
+            list_state.select(Some(*selected));
+            frame.render_widget(ratatui::widgets::Clear, popup);
+            frame.render_stateful_widget(
+                List::new(list_items)
+                    .block(Block::default().borders(Borders::ALL))
+                    .highlight_style(
+                        Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD),
+                    )
+                    .highlight_symbol("› "),
+                popup,
+                &mut list_state,
+            );
+        }
+    }
+
     if matches!(app.mode, InputMode::Help) {
         let help_area = centered_rect(76, 80, area);
         let lines = [
+            "F10                    Open / close menu bar",
+            "Menu arrows / Enter    Choose and activate menu items",
             "j / Down, k / Up       Move selection",
             "Home / End             Jump to first / last item",
             "Page Up / Page Down    Move by page; repeated presses accelerate",
@@ -520,6 +975,19 @@ fn draw(frame: &mut Frame<'_>, app: &App, items: &[BrowserItem]) {
             .wrap(Wrap { trim: false });
         frame.render_widget(ratatui::widgets::Clear, help_area);
         frame.render_widget(help, help_area);
+    }
+    if matches!(app.mode, InputMode::About) {
+        let about_area = centered_rect(60, 35, area);
+        let about = Paragraph::new(format!(
+            "KeePass TUI\n\nVersion: {}\nCommit: {}\nPlatform: {}\n\nPress Enter or Esc to close.",
+            env!("CARGO_PKG_VERSION"),
+            env!("KEEPASS_TUI_COMMIT"),
+            env!("KEEPASS_TUI_TARGET"),
+        ))
+        .block(Block::default().title("ABOUT").borders(Borders::ALL))
+        .wrap(Wrap { trim: false });
+        frame.render_widget(ratatui::widgets::Clear, about_area);
+        frame.render_widget(about, about_area);
     }
     match &app.mode {
         InputMode::AddEntry(form) => {
@@ -645,11 +1113,50 @@ fn item_details(
 fn handle_key(app: &mut App, items: &[BrowserItem], key: KeyEvent) -> Result<bool> {
     app.status.clear();
     match std::mem::take(&mut app.mode) {
+        InputMode::Menu {
+            mut menu,
+            mut selected,
+        } => {
+            match key.code {
+                KeyCode::Esc | KeyCode::F(10) => app.mode = InputMode::Browse,
+                KeyCode::Left => {
+                    menu = (menu + MENU_LABELS.len() - 1) % MENU_LABELS.len();
+                    selected = 0;
+                    app.mode = InputMode::Menu { menu, selected };
+                }
+                KeyCode::Right => {
+                    menu = (menu + 1) % MENU_LABELS.len();
+                    selected = 0;
+                    app.mode = InputMode::Menu { menu, selected };
+                }
+                KeyCode::Up => {
+                    selected = (selected + menu_items(menu).len() - 1) % menu_items(menu).len();
+                    app.mode = InputMode::Menu { menu, selected };
+                }
+                KeyCode::Down => {
+                    selected = (selected + 1) % menu_items(menu).len();
+                    app.mode = InputMode::Menu { menu, selected };
+                }
+                KeyCode::Enter => {
+                    let action = menu_items(menu)[selected].action;
+                    return activate_menu_item(app, items, action);
+                }
+                _ => app.mode = InputMode::Menu { menu, selected },
+            }
+            return Ok(false);
+        }
         InputMode::Help => {
             if key.code == KeyCode::Esc || key.code == KeyCode::Char('?') {
                 app.mode = InputMode::Browse;
             } else {
                 app.mode = InputMode::Help;
+            }
+            return Ok(false);
+        }
+        InputMode::About => {
+            app.mode = InputMode::About;
+            if matches!(key.code, KeyCode::Enter | KeyCode::Esc) {
+                app.mode = InputMode::Browse;
             }
             return Ok(false);
         }
@@ -766,6 +1273,12 @@ fn handle_key(app: &mut App, items: &[BrowserItem], key: KeyEvent) -> Result<boo
     }
     match key.code {
         KeyCode::Char('q') => return Ok(true),
+        KeyCode::F(10) => {
+            app.mode = InputMode::Menu {
+                menu: 0,
+                selected: 0,
+            }
+        }
         KeyCode::Char('?') => app.mode = InputMode::Help,
         KeyCode::Char('/') => {
             app.previous_query = app.query.clone();
@@ -1430,6 +1943,171 @@ mod tests {
             resolve_field(&database, &reference, &field),
             "{REF:U@I:00000000000000000000000000000000} alice"
         );
+    }
+
+    #[test]
+    fn test_menu_opens_search_without_removing_keyboard_shortcut() {
+        let (database, root_id) = test_database(DatabaseVersion::KDBX31);
+        let mut app = App {
+            database,
+            database_path: PathBuf::new(),
+            key: CompositeKey::new(),
+            current_group: root_id,
+            group_history: Vec::new(),
+            query: String::new(),
+            previous_query: String::new(),
+            selected: 0,
+            reveal_password: false,
+            details_focused: false,
+            detail_tab: 0,
+            mode: InputMode::Browse,
+            status: String::new(),
+            page_repeat_direction: None,
+            page_repeat_count: 0,
+            last_page_key: SystemTime::UNIX_EPOCH,
+        };
+        let items = [];
+        handle_key(
+            &mut app,
+            &items,
+            KeyEvent::new(KeyCode::F(10), KeyModifiers::NONE),
+        )
+        .unwrap();
+        handle_key(
+            &mut app,
+            &items,
+            KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+        )
+        .unwrap();
+        handle_key(
+            &mut app,
+            &items,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .unwrap();
+        assert!(matches!(app.mode, InputMode::Search));
+
+        app.mode = InputMode::Browse;
+        handle_key(
+            &mut app,
+            &items,
+            KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
+        )
+        .unwrap();
+        assert!(matches!(app.mode, InputMode::Search));
+    }
+
+    #[test]
+    fn test_mouse_click_opens_and_activates_menu_item() {
+        let (database, root_id) = test_database(DatabaseVersion::KDBX31);
+        let mut app = App {
+            database,
+            database_path: PathBuf::new(),
+            key: CompositeKey::new(),
+            current_group: root_id,
+            group_history: Vec::new(),
+            query: String::new(),
+            previous_query: String::new(),
+            selected: 0,
+            reveal_password: false,
+            details_focused: false,
+            detail_tab: 0,
+            mode: InputMode::Browse,
+            status: String::new(),
+            page_repeat_direction: None,
+            page_repeat_count: 0,
+            last_page_key: SystemTime::UNIX_EPOCH,
+        };
+        let items = [
+            BrowserItem {
+                kind: ItemKind::Entry,
+                id: NodeId::new_uuid(),
+                title: "First".to_string(),
+                subtitle: String::new(),
+                icon: String::new(),
+            },
+            BrowserItem {
+                kind: ItemKind::Entry,
+                id: NodeId::new_uuid(),
+                title: "Second".to_string(),
+                subtitle: String::new(),
+                icon: String::new(),
+            },
+        ];
+        let area = Rect::new(0, 0, 100, 30);
+        app.selected = 1;
+        handle_mouse(
+            &mut app,
+            &items,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 2,
+                row: 4,
+                modifiers: KeyModifiers::NONE,
+            },
+            area,
+        )
+        .unwrap();
+        assert_eq!(app.selected, 0);
+        handle_mouse(
+            &mut app,
+            &items,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 10,
+                row: 1,
+                modifiers: KeyModifiers::NONE,
+            },
+            area,
+        )
+        .unwrap();
+        assert!(matches!(app.mode, InputMode::Menu { menu: 1, .. }));
+        handle_mouse(
+            &mut app,
+            &items,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 10,
+                row: 3,
+                modifiers: KeyModifiers::NONE,
+            },
+            area,
+        )
+        .unwrap();
+        assert!(matches!(app.mode, InputMode::Search));
+    }
+
+    #[test]
+    fn test_help_menu_opens_about_dialog() {
+        let (database, root_id) = test_database(DatabaseVersion::KDBX31);
+        let mut app = App {
+            database,
+            database_path: PathBuf::new(),
+            key: CompositeKey::new(),
+            current_group: root_id,
+            group_history: Vec::new(),
+            query: String::new(),
+            previous_query: String::new(),
+            selected: 0,
+            reveal_password: false,
+            details_focused: false,
+            detail_tab: 0,
+            mode: InputMode::Browse,
+            status: String::new(),
+            page_repeat_direction: None,
+            page_repeat_count: 0,
+            last_page_key: SystemTime::UNIX_EPOCH,
+        };
+        assert_eq!(menu_items(3)[1].label, "About");
+        activate_menu_item(&mut app, &[], menu_items(3)[1].action).unwrap();
+        assert!(matches!(app.mode, InputMode::About));
+        handle_key(
+            &mut app,
+            &[],
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .unwrap();
+        assert!(matches!(app.mode, InputMode::Browse));
     }
 
     #[test]
