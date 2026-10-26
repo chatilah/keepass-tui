@@ -34,17 +34,16 @@ The release includes a checksum-filled `keepass-tui.rb` Homebrew formula.
 
 ## Homebrew
 
-The formula is prepared for a custom tap but is not published there yet. To
-enable tap installs, create a tap repository (for example,
-`chatilah/homebrew-tap`) and copy the generated `keepass-tui.rb` from a GitHub
-release into its `Formula/` directory. Users can then install it with:
+Install the latest macOS release from the `chatilah/tap` Homebrew tap:
 
 ```sh
 brew install chatilah/tap/keepass-tui
 ```
 
-The release workflow attaches a checksum-filled formula to each release; it
-does not publish to the tap automatically. The formula template is in
+The formula is updated automatically when a new version is released. The
+`keepass-tui` GitHub repository needs a `HOMEBREW_TAP_TOKEN` Actions secret
+with write access to the `chatilah/homebrew-tap` repository. The release also
+attaches the checksum-filled formula to its GitHub release. Its template is in
 `Formula/keepass-tui.rb.template`.
 
 ## Controls
