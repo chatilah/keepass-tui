@@ -21,6 +21,6 @@ class KeepassTui < Formula
   end
 
   test do
-    assert_match "usage:", shell_output("#{bin}/keepass-tui --help")
+    assert_match "Usage:", shell_output("#{bin}/keepass-tui --help")
   end
 end

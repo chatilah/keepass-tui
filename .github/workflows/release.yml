@@ -13,11 +13,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-      - run: python -m pip install -e .
-      - run: python -m unittest discover -s tests -v
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo fmt --all -- --check
+      - run: cargo test --locked
 
   build-macos:
     needs: test
@@ -32,19 +30,15 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@stable
       - name: Verify runner architecture
         run: test "$(uname -m)" = "${{ matrix.architecture }}"
-      - run: python -m pip install --upgrade pip pyinstaller
-      - run: python -m pip install .
-      - run: pyinstaller --clean --onefile --name keepass-tui main.py
-      - run: ./dist/keepass-tui --help
+      - run: cargo build --release --locked
+      - run: ./target/release/keepass-tui --help
       - name: Package and checksum binary
         run: |
           archive="keepass-tui-macos-${{ matrix.architecture }}.tar.gz"
-          tar -czf "$archive" -C dist keepass-tui
+          tar -czf "$archive" -C target/release keepass-tui
           shasum -a 256 "$archive" | awk '{print $1}' > "$archive.sha256"
       - uses: actions/upload-artifact@v4
         with:
@@ -65,16 +59,33 @@ jobs:
         with:
           path: release-assets
           merge-multiple: true
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
       - name: Generate Homebrew formula
         run: |
-          python scripts/render_homebrew_formula.py \
-            "$GITHUB_REF_NAME" \
-            release-assets/keepass-tui-macos-arm64.tar.gz.sha256 \
-            release-assets/keepass-tui-macos-x86_64.tar.gz.sha256 \
-            --output release-assets/keepass-tui.rb
+          tag="$GITHUB_REF_NAME"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release tag must use vMAJOR.MINOR.PATCH format."
+            exit 1
+          fi
+          version="${tag#v}"
+          arm_sha="$(cat release-assets/keepass-tui-macos-arm64.tar.gz.sha256)"
+          x86_sha="$(cat release-assets/keepass-tui-macos-x86_64.tar.gz.sha256)"
+          if [[ ! "$arm_sha" =~ ^[0-9a-fA-F]{64}$ || ! "$x86_sha" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            echo "::error::Release assets must contain valid SHA-256 checksums."
+            exit 1
+          fi
+          sed \
+            -e "s/@@VERSION@@/$version/g" \
+            -e "s/@@ARM64_SHA256@@/$arm_sha/g" \
+            -e "s/@@X86_64_SHA256@@/$x86_sha/g" \
+            Formula/keepass-tui.rb.template > release-assets/keepass-tui.rb
+      - name: Verify Homebrew tap token
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "::error::Set the HOMEBREW_TAP_TOKEN Actions secret with write access to chatilah/homebrew-tap."
+            exit 1
+          fi
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -85,14 +96,6 @@ jobs:
             release-assets/keepass-tui.rb \
             --generate-notes \
             --title "$GITHUB_REF_NAME"
-      - name: Verify Homebrew tap token
-        env:
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-        run: |
-          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
-            echo "::error::Set the HOMEBREW_TAP_TOKEN Actions secret with write access to chatilah/homebrew-tap."
-            exit 1
-          fi
       - name: Checkout Homebrew tap
         uses: actions/checkout@v4
         with:

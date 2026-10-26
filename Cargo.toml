@@ -1,0 +1,28 @@
+[package]
+name = "keepass-tui"
+version = "0.1.1"
+edition = "2021"
+rust-version = "1.89"
+description = "A terminal interface for KeePass databases"
+license = "MIT"
+readme = "README.md"
+
+[dependencies]
+anyhow = "1"
+arboard = "3"
+base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
+crossterm = "0.28"
+hex = "0.4"
+hmac = "0.12"
+keepass-rs = { path = "vendor/keepass-rs" }
+ratatui = "0.29"
+rpassword = "7"
+sha1 = "0.10"
+sha2 = "0.10"
+tempfile = "3"
+url = "2"
+zeroize = "1"
+
+[dev-dependencies]
+keepass = { version = "0.17", features = ["save_kdbx4"] }

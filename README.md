@@ -4,13 +4,22 @@ A small terminal interface for browsing an existing KeePass KDBX database.
 
 ## Requirements
 
-- Python 3.9+
-- A terminal with curses support
+- Rust 1.89+ to build from source
+- A terminal that supports interactive TUI applications
 
 ## Run
 
+Install the latest macOS release from Homebrew:
+
 ```sh
-python -m pip install .
+brew install chatilah/tap/keepass-tui
+keepass-tui /path/to/passwords.kdbx
+```
+
+Or build from source:
+
+```sh
+cargo install --path .
 keepass-tui /path/to/passwords.kdbx
 ```
 
@@ -22,15 +31,16 @@ keepass-tui /path/to/passwords.kdbx --keyfile /path/to/database.key
 
 The master password is requested without being echoed. Browsing does not modify
 the database; adding an entry writes it to the database when you save the form.
+KDBX 3.1 and KDBX 4 databases retain their existing format when saved.
 
-For development, install the project in editable mode with `python -m pip install -e .`.
+For development, run `cargo test` and `cargo run -- --help`.
 
 ## CI and releases
 
-GitHub Actions runs the test suite on Python 3.9 through 3.13 and builds the
-Python package. Pushing a `vMAJOR.MINOR.PATCH` tag runs the tests, builds
-standalone Apple Silicon and Intel macOS binaries, and creates a GitHub release.
-The release includes a checksum-filled `keepass-tui.rb` Homebrew formula.
+GitHub Actions checks formatting and runs the Rust test suite. Pushing a
+`vMAJOR.MINOR.PATCH` tag runs the tests, builds standalone Apple Silicon and
+Intel macOS binaries, and creates a GitHub release. The release includes a
+checksum-filled `keepass-tui.rb` Homebrew formula.
 
 ## Homebrew
 
@@ -52,8 +62,8 @@ attaches the checksum-filled formula to its GitHub release. Its template is in
 - `Home` / `End`: jump to the first / last item in the current list
 - `Page Up` / `Page Down`: move by a page; repeated presses accelerate
 - `Alt+Up` / `Alt+Down`: jump to the first / last item in the current list
-- Hold `Alt+Shift+Up` / `Alt+Shift+Down` to move progressively faster through
-  the list when supported by the terminal
+- `Alt+Shift+Up` / `Alt+Shift+Down`: move progressively faster through the
+  list when supported by the terminal
 - `a`: add an entry to the current group (title required; username, password,
   URL, and notes are optional)
 - In the add-entry form, use `Tab` or `Enter` to move between fields; `Enter`
